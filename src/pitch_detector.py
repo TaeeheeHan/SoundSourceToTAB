@@ -192,8 +192,8 @@ class PitchDetector:
     # ── librosa (pyin) 백엔드 ────────────────────────────────────────
     def _detect_librosa(self, audio_path: str) -> List[NoteEvent]:
         SR    = 22050
-        HOP   = 256     # 더 촘촘한 hop → 시간 정밀도 향상
-        FRAME = 4096    # 큰 프레임 → 저주파 해상도 향상
+        HOP   = 256
+        FRAME = 8192    # 저주파(35Hz) 해상도 향상 — 4096보다 안정적
 
         y, sr = librosa.load(audio_path, sr=SR, mono=True)
         y = librosa.util.normalize(y)
@@ -201,11 +201,11 @@ class PitchDetector:
         # 베이스 주파수 대역 필터
         y_filt = self._bandpass(y, SR, 28, 380)
 
-        # 하모닉 분리 (배음 혼동 방지)
-        y_harm = librosa.effects.harmonic(y_filt, margin=4.0)
+        # 하모닉 분리 (배음 혼동 방지) — margin 낮춰 지나친 제거 방지
+        y_harm = librosa.effects.harmonic(y_filt, margin=2.0)
 
-        # 어택 검출
-        onset_frames = self._detect_onsets(y, SR, HOP)
+        # 어택 검출 — 베이스 대역 신호로, delta 낮춰 더 많은 온셋 포착
+        onset_frames = self._detect_onsets(y_filt, SR, HOP)
         onset_times  = librosa.frames_to_time(onset_frames, sr=SR, hop_length=HOP)
 
         # pyin 피치 추적
@@ -220,14 +220,17 @@ class PitchDetector:
         )
         times = librosa.times_like(f0, sr=SR, hop_length=HOP)
 
+        # voiced_prob 기반 완화된 마스크 (pyin voiced_flag는 너무 보수적)
+        is_voiced = (voiced_prob >= 0.10) & (~np.isnan(f0))
+
         # f0 스무딩
-        f0_smooth = self._smooth_f0(f0, voiced_flag)
+        f0_smooth = self._smooth_f0(f0, is_voiced)
 
         # 노트 이벤트 생성
-        notes = self._build_notes(f0_smooth, voiced_flag, voiced_prob,
+        notes = self._build_notes(f0_smooth, is_voiced, voiced_prob,
                                    times, onset_times)
-        notes = self._filter_short(notes, min_dur=0.06)
-        notes = self._merge_same_pitch(notes, max_gap=0.12)
+        notes = self._filter_short(notes, min_dur=0.04)
+        notes = self._merge_same_pitch(notes, max_gap=0.08)
         return notes
 
     # ── 전처리 유틸 ──────────────────────────────────────────────────
@@ -248,7 +251,7 @@ class PitchDetector:
             onset_envelope=onset_env,
             sr=sr, hop_length=hop,
             backtrack=True, units='frames',
-            delta=0.25, wait=2,
+            delta=0.07, wait=1,   # 낮은 delta → 약한 베이스 어택도 포착
         )
 
     def _smooth_f0(self, f0: np.ndarray, voiced_flag: np.ndarray) -> np.ndarray:
@@ -271,8 +274,13 @@ class PitchDetector:
         total_t = float(times[-1]) if len(times) > 0 else 0.0
 
         for i, t0 in enumerate(onset_times):
-            t1   = float(onset_times[i + 1]) if i + 1 < len(onset_times) else total_t
-            mask = (times >= t0) & (times < t1) & voiced_flag
+            t1        = float(onset_times[i + 1]) if i + 1 < len(onset_times) else total_t
+            time_mask = (times >= t0) & (times < t1)
+            mask      = time_mask & voiced_flag
+
+            # voiced_flag가 너무 엄격해 구간 전체 미검출 시 → prob 기반 폴백
+            if not np.any(mask):
+                mask = time_mask & (voiced_prob >= 0.10) & (~np.isnan(f0))
 
             if not np.any(mask):
                 continue

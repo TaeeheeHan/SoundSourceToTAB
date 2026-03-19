@@ -131,11 +131,20 @@ class FretboardMapper:
         """
         def cost(pos: Tuple[int, int]) -> float:
             s, fret = pos
-            dist = abs(fret - hand_fret)
-            fret_pref = fret * 0.08                 # prefer lower frets
+            dist       = abs(fret - hand_fret)
+            fret_pref  = fret * 0.06
             open_bonus = -2.0 if fret == 0 else 0.0
-            # Prefer low strings E (idx 3) and A (idx 2) — natural bass register
-            string_pref = 0.0 if s in (2, 3) else 0.30
-            return dist + fret_pref + open_bonus + string_pref
+
+            # 우선순위 (사용자 지정):
+            #   12프렛 이내 E·A > 12프렛 이내 D·G
+            #   > 12프렛 초과 E·A > 12프렛 초과 D·G
+            is_ea = s in (2, 3)
+            in_12 = fret <= 12
+            if   is_ea and in_12:     string_pos = 0.0
+            elif not is_ea and in_12: string_pos = 0.6
+            elif is_ea:               string_pos = 1.2
+            else:                     string_pos = 1.8
+
+            return dist + fret_pref + open_bonus + string_pos
 
         return min(positions, key=cost)

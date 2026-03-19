@@ -21,7 +21,7 @@ from .fretboard_mapper import TabNote
 
 class TabCanvas(tk.Frame):
     # ── 레이아웃 상수 ────────────────────────────────────────────────
-    PX_PER_BEAT   = 56      # 1박 기본 픽셀 (동적으로 조정됨)
+    PX_PER_BEAT   = 56      # 1박 픽셀 (4박 × 56 = 224px ≈ 6cm/마디 고정)
     STR_SPACING   = 46      # 현 간격 (px)
     STR_TOP_PAD   = 52      # 행 상단 ↔ G현 거리
     ROW_BOTTOM    = 44      # E현 ↔ 다음 행 거리
@@ -40,8 +40,7 @@ class TabCanvas(tk.Frame):
     # 현별 노트 텍스트 색 (밝은 색으로 현 선 위에서 가독성 확보)
     NOTE_COLORS  = ['#42A5F5', '#66BB6A', '#FF9800', '#CE93D8']  # G D A E
 
-    # 노트 간 최소 픽셀 간격 (동적 PX_PER_BEAT 계산 기준)
-    MIN_NOTE_GAP_PX = 22
+    HEADER_H      = 38      # 조성 표기 영역 높이
 
     FONT_NOTE    = ('Helvetica', 11, 'bold')
     FONT_STR     = ('Helvetica', 11, 'bold')
@@ -64,22 +63,23 @@ class TabCanvas(tk.Frame):
         vsb.grid(row=0, column=1, sticky='ns')
         hsb.grid(row=1, column=0, sticky='ew')
 
-        # 마우스 휠 스크롤
+        # 마우스 휠 스크롤 (macOS 트랙패드 과속 방지)
         self._cv.bind('<MouseWheel>',
-                      lambda e: self._cv.yview_scroll(-1 * (e.delta // 120), 'units'))
+                      lambda e: self._cv.yview_scroll(
+                          max(-2, min(2, int(-e.delta / 20))), 'units'))
 
-        self._notes:        List[TabNote] = []
-        self._bpm:          float = 120.0
-        self._bpr:          int   = 4
-        self._dyn_px_beat:  int   = self.PX_PER_BEAT  # 동적 계산값
+        self._notes: List[TabNote] = []
+        self._bpm:   float = 120.0
+        self._bpr:   int   = 4
+        self._key:   str   = ''
 
     # ── 공개 API ─────────────────────────────────────────────────────
     def set_notes(self, notes: List[TabNote], bpm: float = 120.0,
-                  bars_per_row: int = 4):
+                  bars_per_row: int = 4, key: str = ''):
         self._notes = notes
         self._bpm   = max(1.0, bpm)
         self._bpr   = max(1, bars_per_row)
-        self._dyn_px_beat = self._compute_px_per_beat(notes, self._bpm)
+        self._key   = key
         self.redraw()
 
     def clear(self):
@@ -88,27 +88,13 @@ class TabCanvas(tk.Frame):
         self._cv.configure(scrollregion=(0, 0, 100, 100))
 
     # ── 렌더링 ───────────────────────────────────────────────────────
-    def _compute_px_per_beat(self, notes: List[TabNote], bpm: float) -> int:
-        """노트 간 최소 간격을 기준으로 PX_PER_BEAT를 동적으로 결정."""
-        if len(notes) < 2:
-            return self.PX_PER_BEAT
-        beat_dur = 60.0 / bpm
-        sorted_beats = sorted(n.start_time * (bpm / 60.0) for n in notes)
-        gaps = [b - a for a, b in zip(sorted_beats, sorted_beats[1:]) if b - a > 1e-4]
-        if not gaps:
-            return self.PX_PER_BEAT
-        min_gap = min(gaps)
-        # min_gap 비트 간격이 MIN_NOTE_GAP_PX 이상이 되도록 px_per_beat 확장
-        needed = int(self.MIN_NOTE_GAP_PX / max(min_gap, 0.01))
-        return max(self.PX_PER_BEAT, min(needed, 300))
-
     @property
     def _row_h(self) -> int:
         return self.STR_TOP_PAD + 3 * self.STR_SPACING + self.ROW_BOTTOM
 
     @property
     def _bar_w(self) -> int:
-        return self._dyn_px_beat * self.BEATS_PER_BAR
+        return self.PX_PER_BEAT * self.BEATS_PER_BAR  # 고정 6cm/마디
 
     def redraw(self):
         cv = self._cv
@@ -122,23 +108,35 @@ class TabCanvas(tk.Frame):
             )
             return
 
-        bpm          = self._bpm
-        bpr          = self._bpr
+        bpm           = self._bpm
+        bpr           = self._bpr
+        px_beat       = self.PX_PER_BEAT
         beats_per_row = bpr * self.BEATS_PER_BAR
-        total_sec    = max(n.end_time for n in self._notes)
-        total_beats  = total_sec * (bpm / 60.0)
-        num_rows     = max(1, int(total_beats / beats_per_row) + 1)
+        total_sec     = max(n.end_time for n in self._notes)
+        total_beats   = total_sec * (bpm / 60.0)
+        num_rows      = max(1, int(total_beats / beats_per_row) + 1)
 
-        rh    = self._row_h
-        bw    = self._bar_w
-        row_w = self.LEFT_MARGIN + bpr * bw + self.RIGHT_MARGIN
-        total_h = num_rows * rh + 20
+        rh      = self._row_h
+        bw      = self._bar_w
+        row_w   = self.LEFT_MARGIN + bpr * bw + self.RIGHT_MARGIN
+        header  = self.HEADER_H if self._key else 0
+        total_h = header + num_rows * rh + 20
 
         cv.configure(scrollregion=(0, 0, row_w, total_h))
 
+        # 조성 헤더
+        if self._key:
+            cv.create_text(
+                self.LEFT_MARGIN, header // 2,
+                text=self._key,
+                fill='#80CFFF',
+                font=('Helvetica', 13, 'bold'),
+                anchor='w',
+            )
+
         # 행 배경 + 현 + 마디선
         for row in range(num_rows):
-            self._draw_row(cv, row, row * rh, bpr, bw, row_w)
+            self._draw_row(cv, row, header + row * rh, bpr, bw, row_w)
 
         # 음표
         for note in self._notes:
@@ -147,8 +145,8 @@ class TabCanvas(tk.Frame):
             beat_in_row = t_beats % beats_per_row
             if row >= num_rows:
                 continue
-            cx = self.LEFT_MARGIN + beat_in_row * self._dyn_px_beat
-            cy = row * rh + self.STR_TOP_PAD + note.string_idx * self.STR_SPACING
+            cx = self.LEFT_MARGIN + beat_in_row * px_beat
+            cy = header + row * rh + self.STR_TOP_PAD + note.string_idx * self.STR_SPACING
             self._draw_note(cv, cx, cy, note.fret, note.string_idx)
 
     def _draw_row(self, cv, row: int, y0: int, bpr: int, bw: int, row_w: int):
@@ -226,7 +224,7 @@ class TabCanvas(tk.Frame):
 
         bpm           = self._bpm
         bpr           = self._bpr
-        px_beat       = self._dyn_px_beat
+        px_beat       = self.PX_PER_BEAT
         beats_per_row = bpr * self.BEATS_PER_BAR
         total_sec     = max(n.end_time for n in self._notes)
         total_beats   = total_sec * (bpm / 60.0)

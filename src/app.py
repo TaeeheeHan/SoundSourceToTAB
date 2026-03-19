@@ -16,7 +16,7 @@ import customtkinter as ctk
 from .audio_processor import AudioProcessor, SUPPORTED_FORMATS
 from .pitch_detector import PitchDetector, _basic_pitch_available, _crepe_available
 from .fretboard_mapper import FretboardMapper, TUNINGS
-from .tab_renderer import TabRenderer
+from .tab_renderer import TabRenderer, detect_key
 from .tab_canvas import TabCanvas
 
 ctk.set_appearance_mode("dark")
@@ -354,7 +354,14 @@ class BassTabApp(ctk.CTk):
         threading.Thread(target=self._analysis_thread, daemon=True).start()
 
     def _analysis_thread(self):
+        import pathlib
+        _log = pathlib.Path.home() / 'Desktop' / 'Bass' / 'debug.log'
+        def _write(msg):
+            with open(_log, 'a', encoding='utf-8') as f:
+                import datetime
+                f.write(f"[{datetime.datetime.now():%H:%M:%S}] {msg}\n")
         try:
+            _write(f"분석 시작: {self.current_file}")
             self._ui(lambda: self._set_tab_text('오디오 파일 로딩 중…'))
             self._ui(lambda: self.progress.set(0.1))
 
@@ -364,9 +371,11 @@ class BassTabApp(ctk.CTk):
             self._ui(lambda: self.progress.set(0.2))
 
             min_conf = self.conf_var.get()
+            _write(f"음정 감지 시작 (method={self.method_var.get()}, conf={min_conf})")
             note_events = self.detector.detect_notes(
                 self.current_file, min_confidence=min_conf)
             self.note_events = note_events
+            _write(f"음정 감지 완료: {len(note_events)}개")
 
             self._ui(lambda: self.progress.set(0.65))
             self._ui(lambda: self._set_tab_text(
@@ -383,30 +392,34 @@ class BassTabApp(ctk.CTk):
                 bpm = 120.0
             bpr = int(self.bpr_var.get())
 
+            key_str  = detect_key(tab_notes)
             tab_text = self.renderer.render_measures(
                 tab_notes, bpm=bpm, measures_per_row=bpr)
             header = (
                 f'파일: {Path(self.current_file).name}  |  '
                 f'BPM: {bpm}  |  '
-                f'음표: {len(note_events)}개\n'
+                f'음표: {len(note_events)}개  |  {key_str}\n'
                 f'{"─" * 60}\n\n'
             )
 
             self._ui(lambda: self.progress.set(1.0))
             self._ui(lambda: self._on_done(tab_notes, bpm, bpr,
-                                            header + tab_text, len(note_events)))
+                                            header + tab_text, len(note_events),
+                                            key_str))
 
         except Exception:
             err = traceback.format_exc()
+            _write(f"에러 발생:\n{err}")
             self._ui(lambda: self._on_error(err))
 
-    def _on_done(self, tab_notes, bpm, bpr, tab_text, n):
-        self.tab_canvas.set_notes(tab_notes, bpm=bpm, bars_per_row=bpr)
+    def _on_done(self, tab_notes, bpm, bpr, tab_text, n, key_str=''):
+        self.tab_canvas.set_notes(tab_notes, bpm=bpm, bars_per_row=bpr,
+                                   key=key_str)
         self._set_tab_text(tab_text)
         self.btn_analyze.configure(state='normal')
         self.btn_export.configure(state='normal')
         self.status_lbl.configure(
-            text=f'{n}개 음표 완료', text_color='#4CAF50')
+            text=f'{n}개 음표 완료  {key_str}', text_color='#4CAF50')
         self.note_count_lbl.configure(text=f'{n}개 음표')
         # 현재 보기 모드에 맞게 표시
         self._on_view_change(self.view_var.get())
@@ -428,7 +441,8 @@ class BassTabApp(ctk.CTk):
                     bpm = 120.0
                 bpr = int(self.bpr_var.get())
                 self.tab_canvas.set_notes(self.tab_notes, bpm=bpm,
-                                           bars_per_row=bpr)
+                                           bars_per_row=bpr,
+                                           key=self.tab_canvas._key)
         else:
             self._show_canvas(False)
             if self.tab_notes:

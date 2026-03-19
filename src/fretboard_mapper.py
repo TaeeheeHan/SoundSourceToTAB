@@ -121,30 +121,29 @@ class FretboardMapper:
                        positions: List[Tuple[int, int]],
                        hand_fret: float) -> Tuple[int, int]:
         """
-        Score each candidate position and return the lowest-cost one.
-
-        Cost components:
-          - fret distance from current hand position (main factor)
-          - small fret number preference (lower frets are easier)
-          - open-string bonus (-2)
-          - string preference: A (idx 2) and D (idx 1) slightly preferred
+        2단계 선택:
+          1단계: 이동 거리(+개방현 보너스) 기준으로 최솟값 산출
+          2단계: 최솟값 +2 이내 후보들 중에서만 현 우선순위 적용
+                 → 멀리 있는 E/A 포지션이 가까운 D/G 포지션을 이기지 못함
         """
-        def cost(pos: Tuple[int, int]) -> float:
+        def dist_cost(pos: Tuple[int, int]) -> float:
             s, fret = pos
-            dist       = abs(fret - hand_fret)
-            fret_pref  = fret * 0.06
-            open_bonus = -2.0 if fret == 0 else 0.0
+            return abs(fret - hand_fret) + fret * 0.06 + (-2.0 if fret == 0 else 0.0)
 
-            # 우선순위 (사용자 지정):
-            #   12프렛 이내 E·A > 12프렛 이내 D·G
-            #   > 12프렛 초과 E·A > 12프렛 초과 D·G
+        def string_rank(pos: Tuple[int, int]) -> int:
+            """낮을수록 우선 (12프렛 이내 E·A > D·G > 12프렛 초과 E·A > D·G)"""
+            s, fret = pos
             is_ea = s in (2, 3)
             in_12 = fret <= 12
-            if   is_ea and in_12:     string_pos = 0.0
-            elif not is_ea and in_12: string_pos = 0.6
-            elif is_ea:               string_pos = 1.2
-            else:                     string_pos = 1.8
+            if   is_ea and in_12:     return 0
+            elif not is_ea and in_12: return 1
+            elif is_ea:               return 2
+            else:                     return 3
 
-            return dist + fret_pref + open_bonus + string_pos
+        min_dc    = min(dist_cost(p) for p in positions)
+        # 거리상 2 이내인 후보만 현 우선순위 대상으로 제한
+        TOLERANCE = 2.0
+        candidates = [p for p in positions if dist_cost(p) <= min_dc + TOLERANCE]
 
-        return min(positions, key=cost)
+        # 우선순위 먼저, 동률이면 거리로 결정
+        return min(candidates, key=lambda p: (string_rank(p), dist_cost(p)))

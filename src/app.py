@@ -16,7 +16,7 @@ import customtkinter as ctk
 from .audio_processor import AudioProcessor, SUPPORTED_FORMATS
 from .pitch_detector import PitchDetector, _basic_pitch_available, _crepe_available
 from .fretboard_mapper import FretboardMapper, TUNINGS
-from .tab_renderer import TabRenderer, detect_key
+from .tab_renderer import TabRenderer, detect_key, detect_key_from_audio
 from .tab_canvas import TabCanvas
 
 ctk.set_appearance_mode("dark")
@@ -98,6 +98,13 @@ class BassTabApp(ctk.CTk):
                                            fg_color='#4A148C',
                                            hover_color='#6A1B9A')
         self.btn_bpm_auto.grid(row=0, column=12, padx=(0, 8))
+
+        # 마디 오프셋
+        ctk.CTkLabel(bar, text='시작 마디:').grid(row=0, column=15, padx=(4, 2))
+        self.measure_offset_var = ctk.StringVar(value='0')
+        offset_entry = ctk.CTkEntry(bar, textvariable=self.measure_offset_var, width=44)
+        offset_entry.grid(row=0, column=16, padx=(0, 8))
+        self.measure_offset_var.trace_add('write', lambda *_: self._on_offset_change())
 
         # 화면 모드
         ctk.CTkLabel(bar, text='보기:').grid(row=0, column=13, padx=(4, 2))
@@ -280,6 +287,40 @@ class BassTabApp(ctk.CTk):
         path = event.data.strip().lstrip('{').rstrip('}')
         self.load_file(path)
 
+    # ─────────────────────────── 마디 오프셋 ────────────────────────
+
+    def _get_measure_offset(self) -> int:
+        try:
+            return int(self.measure_offset_var.get())
+        except (ValueError, AttributeError):
+            return 0
+
+    def _on_offset_change(self):
+        """오프셋 변경 즉시 악보/텍스트 TAB 재렌더링."""
+        if not self.tab_notes:
+            return
+        try:
+            bpm = float(self.bpm_var.get())
+        except ValueError:
+            bpm = 120.0
+        bpr    = int(self.bpr_var.get())
+        offset = self._get_measure_offset()
+        # 텍스트 TAB 재렌더
+        tab_text = self.renderer.render_measures(
+            self.tab_notes, bpm=bpm, measures_per_row=bpr,
+            measure_offset=offset)
+        header = (
+            f'파일: {Path(self.current_file).name}  |  '
+            f'BPM: {bpm}  |  {self.tab_canvas._key}\n'
+            f'{"─" * 60}\n\n'
+        )
+        self._set_tab_text(header + tab_text)
+        # 캔버스는 마디 번호 오프셋 반영
+        self.tab_canvas.set_notes(self.tab_notes, bpm=bpm,
+                                   bars_per_row=bpr,
+                                   key=self.tab_canvas._key,
+                                   measure_offset=offset)
+
     # ─────────────────────────── BPM 자동 감지 ──────────────────────
 
     def detect_bpm_auto(self):
@@ -392,9 +433,15 @@ class BassTabApp(ctk.CTk):
                 bpm = 120.0
             bpr = int(self.bpr_var.get())
 
-            key_str  = detect_key(tab_notes)
+            # 오디오 크로마 기반 조성 감지 (음표 히스토그램보다 정확)
+            key_str = detect_key_from_audio(self.current_file)
+            if not key_str:
+                key_str = detect_key(tab_notes)   # 폴백
+
+            offset = self._get_measure_offset()
             tab_text = self.renderer.render_measures(
-                tab_notes, bpm=bpm, measures_per_row=bpr)
+                tab_notes, bpm=bpm, measures_per_row=bpr,
+                measure_offset=offset)
             header = (
                 f'파일: {Path(self.current_file).name}  |  '
                 f'BPM: {bpm}  |  '
@@ -405,16 +452,16 @@ class BassTabApp(ctk.CTk):
             self._ui(lambda: self.progress.set(1.0))
             self._ui(lambda: self._on_done(tab_notes, bpm, bpr,
                                             header + tab_text, len(note_events),
-                                            key_str))
+                                            key_str, offset))
 
         except Exception:
             err = traceback.format_exc()
             _write(f"에러 발생:\n{err}")
             self._ui(lambda: self._on_error(err))
 
-    def _on_done(self, tab_notes, bpm, bpr, tab_text, n, key_str=''):
+    def _on_done(self, tab_notes, bpm, bpr, tab_text, n, key_str='', offset=0):
         self.tab_canvas.set_notes(tab_notes, bpm=bpm, bars_per_row=bpr,
-                                   key=key_str)
+                                   key=key_str, measure_offset=offset)
         self._set_tab_text(tab_text)
         self.btn_analyze.configure(state='normal')
         self.btn_export.configure(state='normal')

@@ -68,18 +68,21 @@ class TabCanvas(tk.Frame):
                       lambda e: self._cv.yview_scroll(
                           max(-2, min(2, int(-e.delta / 20))), 'units'))
 
-        self._notes: List[TabNote] = []
-        self._bpm:   float = 120.0
-        self._bpr:   int   = 4
-        self._key:   str   = ''
+        self._notes:          List[TabNote] = []
+        self._bpm:            float = 120.0
+        self._bpr:            int   = 4
+        self._key:            str   = ''
+        self._measure_offset: int   = 0
 
     # ── 공개 API ─────────────────────────────────────────────────────
     def set_notes(self, notes: List[TabNote], bpm: float = 120.0,
-                  bars_per_row: int = 4, key: str = ''):
-        self._notes = notes
-        self._bpm   = max(1.0, bpm)
-        self._bpr   = max(1, bars_per_row)
-        self._key   = key
+                  bars_per_row: int = 4, key: str = '',
+                  measure_offset: int = 0):
+        self._notes          = notes
+        self._bpm            = max(1.0, bpm)
+        self._bpr            = max(1, bars_per_row)
+        self._key            = key
+        self._measure_offset = measure_offset
         self.redraw()
 
     def clear(self):
@@ -136,7 +139,8 @@ class TabCanvas(tk.Frame):
 
         # 행 배경 + 현 + 마디선
         for row in range(num_rows):
-            self._draw_row(cv, row, header + row * rh, bpr, bw, row_w)
+            self._draw_row(cv, row, header + row * rh, bpr, bw, row_w,
+                           self._measure_offset)
 
         # 음표
         for note in self._notes:
@@ -149,7 +153,8 @@ class TabCanvas(tk.Frame):
             cy = header + row * rh + self.STR_TOP_PAD + note.string_idx * self.STR_SPACING
             self._draw_note(cv, cx, cy, note.fret, note.string_idx)
 
-    def _draw_row(self, cv, row: int, y0: int, bpr: int, bw: int, row_w: int):
+    def _draw_row(self, cv, row: int, y0: int, bpr: int, bw: int, row_w: int,
+                  measure_offset: int = 0):
         # 현 라인 + 이름
         for s in range(4):
             sy = y0 + self.STR_TOP_PAD + s * self.STR_SPACING
@@ -178,7 +183,7 @@ class TabCanvas(tk.Frame):
             cv.create_line(x, sy_top, x, sy_bot, fill=color, width=lw)
             # 마디 번호
             if b < bpr:
-                mnum = row * bpr + b + 1
+                mnum = row * bpr + b + 1 + measure_offset
                 cv.create_text(
                     x + 4, sy_bot + 16,
                     text=str(mnum),

@@ -24,36 +24,47 @@ _MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17
 _NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 
-def detect_key(tab_notes: List[TabNote]) -> str:
-    """
-    음표의 피치 클래스 히스토그램을 Krumhansl-Kessler 알고리즘으로 분석해
-    조성(장조/단조)을 판별합니다.
-    """
-    if not tab_notes:
+def _kk_correlate(chroma: np.ndarray) -> str:
+    """Krumhansl-Kessler 알고리즘으로 피치 클래스 벡터 → 조성 문자열."""
+    if chroma.sum() == 0:
         return ''
-
-    # 음표 길이 가중 피치 클래스 히스토그램
-    hist = np.zeros(12)
-    for n in tab_notes:
-        pc = n.pitch_midi % 12
-        hist[pc] += max(n.end_time - n.start_time, 0.01)
-
-    if hist.sum() == 0:
-        return ''
-    hist = hist / hist.sum()
-
-    best_corr = -np.inf
-    best_key  = ''
-
+    h = chroma / chroma.sum()
+    best_corr, best_key = -np.inf, ''
     for root in range(12):
         for profile, mode in [(_MAJOR, '장조'), (_MINOR, '단조')]:
             rotated = np.array([profile[(i - root) % 12] for i in range(12)])
-            corr    = float(np.corrcoef(hist, rotated)[0, 1])
+            corr    = float(np.corrcoef(h, rotated)[0, 1])
             if corr > best_corr:
                 best_corr = corr
                 best_key  = f"Key: {_NOTE_NAMES[root]} {mode}"
-
     return best_key
+
+
+def detect_key_from_audio(audio_path: str) -> str:
+    """
+    오디오 파일에서 CQT 크로마 피처를 추출해 조성을 판별합니다.
+    베이스 음표 히스토그램보다 전체 화성 정보를 사용하므로 정확도가 높습니다.
+    """
+    try:
+        import librosa as _lb
+        y, sr = _lb.load(audio_path, sr=22050, mono=True)
+        # CQT 크로마: 저음역 해상도 향상 (bins_per_octave=36)
+        chroma = _lb.feature.chroma_cqt(y=y, sr=sr, bins_per_octave=36)
+        return _kk_correlate(chroma.mean(axis=1))
+    except Exception:
+        return ''
+
+
+def detect_key(tab_notes: List[TabNote]) -> str:
+    """
+    음표 피치 클래스 히스토그램으로 조성 판별 (오디오 없을 때 폴백용).
+    """
+    if not tab_notes:
+        return ''
+    hist = np.zeros(12)
+    for n in tab_notes:
+        hist[n.pitch_midi % 12] += max(n.end_time - n.start_time, 0.01)
+    return _kk_correlate(hist)
 
 
 class TabRenderer:
@@ -65,7 +76,8 @@ class TabRenderer:
                         bpm: float = 120.0,
                         beats_per_measure: int = 4,
                         measures_per_row: int = 4,
-                        resolution: int = 8) -> str:
+                        resolution: int = 8,
+                        measure_offset: int = 0) -> str:
         """
         Render TAB aligned to a musical grid.
 
@@ -122,10 +134,10 @@ class TabRenderer:
                     row += ''.join(grid[s][c0:c1]) + '|'
                 lines.append(row)
 
-            # Measure number annotation
+            # Measure number annotation (offset 적용)
             measure_nums = '  '
             for m in range(row_m, end_m):
-                label = str(m + 1)
+                label = str(m + 1 + measure_offset)
                 measure_nums += label.ljust(cols_per_measure + 1)
             lines.append(measure_nums.rstrip())
             lines.append('')

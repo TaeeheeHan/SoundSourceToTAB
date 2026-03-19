@@ -1,0 +1,13 @@
+customtkinter>=5.2.0
+librosa>=0.10.0
+numpy>=1.24.0
+soundfile>=0.12.0
+reportlab>=4.0.0
+scipy>=1.10.0
+# Optional: AI 음정 감지 (정확도 순)
+# pip install crepe          # 딥러닝 F0 추정 (권장, TF 불필요)
+# pip install basic-pitch onnxruntime  # Spotify Basic Pitch (ONNX)
+# Optional: PNG 내보내기
+# pip install pillow
+# Optional: 드래그&드롭
+# pip install tkinterdnd2
